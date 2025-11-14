@@ -1,560 +1,326 @@
-# Key Weaver – Two-Passphrase Deterministic Key Generator for VeraCrypt
-
-A small command-line tool that deterministically derives high-entropy key material from **two independent passphrases**, suitable for use with **VeraCrypt** (as a password or keyfile) or any other system that accepts raw keys / hex strings.
-
-Same passphrases + same KDF settings ⇒ **exactly the same key** every time.
-
-> ⚠️ This tool handles cryptographic secrets. Treat its output like a live grenade made of math.
+# KeyWeaver  
+### *Deterministic Two-Passphrase Cryptographic Key Generator*
 
 ---
 
-## Features
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
+![Security](https://img.shields.io/badge/security-crypto-brightgreen.svg)
+![Build](https://img.shields.io/badge/status-stable-success.svg)
 
-- 🔑 **Two-passphrase design**  
-  Combines two independent passphrases into a single 128-byte key.
+KeyWeaver is a deterministic, high-security key generator designed for systems like **VeraCrypt**, secure backups, or any environment where a **repeatable** but **strong** key must be derived from **two independent passphrases**.
 
-- ♻️ **Deterministic output**  
-  Same inputs + same KDF parameters always produce the same key or keyfile.
-
-- 🧮 **Modern KDFs**  
-  - `PBKDF2-HMAC-SHA512` (default, configurable iterations)  
-  - `scrypt` (memory-hard, tunable N/r/p)
-
-- 🎛 **Flexible output modes**
-  - Full 256-character hex key (128 bytes)
-  - VeraCrypt-style 64-character hex string (32 bytes – max VC password length)
-  - Raw binary keyfile, suitable as a VeraCrypt keyfile
-
-- 📋 **Clipboard support**  
-  Copy the key directly to the system clipboard (Linux/macOS/Windows/WSL).
-
-- 🧠 **Weak passphrase warnings**  
-  Very rough entropy estimate; warns you if your passphrases look weak.
+KeyWeaver combines modern hashing (SHA3 + BLAKE2), a two-secret XOR mixing strategy, and industry-standard KDFs (PBKDF2, scrypt, and Argon2id).  
+The result is a hardened, wallet-style key generator suitable for serious cryptographic use.
 
 ---
 
-## Quick Start
+## ✨ Features
+
+- 🔐 **Two-passphrase input** for dual-factor secret derivation  
+- 🧮 **Modern hash combiner:**  
+  - `SHA3-256(secret)`  
+  - `BLAKE2b-256(secret, personalization)`  
+  - Combined via XOR  
+- 🧱 **Multiple modern KDFs:**  
+  - **PBKDF2-HMAC-SHA512** (portable, legacy compatible)  
+  - **scrypt** (memory-hard, GPU-resistant)  
+  - **Argon2id** (PHC winner, modern best practice)  
+- 💾 **Output modes:**  
+  - Full 128-byte key  
+  - VeraCrypt 32-byte compatible key  
+  - Raw binary keyfile output  
+- 📋 Optional clipboard copy  
+- 🔇 Quiet mode for scripting  
+- 🛡️ Passphrase strength warning  
+- 🧩 Fully deterministic: same inputs → same outputs  
+- 🐧 macOS, Linux, Windows, and WSL compatible  
+
+---
+
+## 📦 Installation
+
+### 1. Clone the repository
 
 ```bash
-# Default: PBKDF2, full 256-char hex key printed to stdout
-python3 keyweaver.py
+git clone https://github.com/your-username/keyweaver.git
+cd keyweaver
 ```
 
-You will be prompted:
+### 2. Install dependencies
 
-- `Passphrase #1` (with confirmation)
-- `Passphrase #2` (with confirmation)
+```bash
+pip install -r requirements.txt
+```
 
-Then the derived key is shown:
+Your `requirements.txt`:
 
 ```text
-=== DERIVED KEY ===
-<256 hex characters here>
-===================
+argon2-cffi>=23.1.0
 ```
 
----
-
-## Installation
-
-1. Save the script as `keyweaver.py` (or whatever name you prefer).
-2. Ensure you have Python 3 installed (3.8+ recommended).
-3. Make it executable (optional, Unix-like systems):
-
-   ```bash
-   chmod +x keyweaver.py
-   ```
-
-4. Run it:
-
-   ```bash
-   ./keyweaver.py        # Unix-like
-   # or
-   python3 keyweaver.py  # any OS
-   ```
-
-No external Python dependencies are required; everything uses the standard library.
+Argon2id is optional — PBKDF2 and scrypt work without it — but recommended.
 
 ---
 
-## How It Works (High Level)
+## 🚀 Usage
 
-1. You enter **two passphrases**, each confirmed.
-2. The tool computes:
-
-   ```text
-   preimage = SHA-512(passphrase_1) || SHA-512(passphrase_2)
-   ```
-
-3. A deterministic salt is derived from this preimage and a context tag:
-   - For PBKDF2: `"VC2PBKDF2"`
-   - For scrypt: `"VC2SCRYPT"`
-
-4. The chosen KDF (PBKDF2 or scrypt) derives **128 bytes** of key material.
-5. Depending on output mode, the key is:
-   - Printed as hex (256 chars / 128 bytes),
-   - Truncated to the first 64 hex chars (32 bytes) for VeraCrypt,
-   - Or written as a **binary keyfile**.
-
-Intermediate buffers are overwritten (best-effort in Python) once they’re no longer needed.
-
----
-
-## Usage
-
-### Basic Usage (Default)
+Run the program:
 
 ```bash
 python3 keyweaver.py
 ```
 
-- KDF: PBKDF2-HMAC-SHA512
-- Iterations: 600000
-- Output: 256-character hex key printed to stdout
+You will be asked for:
+
+- **Passphrase #1**
+- **Passphrase #2**  
+  (each entered twice to confirm)
+
+A key will be derived and printed or written to a file depending on mode.
 
 ---
 
-### VeraCrypt-Style Password Mode
+# 🔧 Command Line Options
 
-Produce a 64-character hex string (32 bytes), which matches VeraCrypt’s maximum password length:
+## KDF Selection
+
+### PBKDF2 (default)
 
 ```bash
-python3 keyweaver.py --output-mode veracrypt
-# or the shorthand:
-python3 keyweaver.py --veracrypt
+--kdf pbkdf2
+--pbkdf2-iter 600000
 ```
 
-Use the printed 64-character string as your VeraCrypt volume password.
+### scrypt
+
+```bash
+--kdf scrypt
+--scrypt-n 16384
+--scrypt-r 8
+--scrypt-p 1
+```
+
+### Argon2id (modern recommended)
+
+```bash
+--kdf argon2id
+--argon2-m 65536      # memory cost in KiB (64 MiB)
+--argon2-t 3          # time cost
+--argon2-p 1          # parallelism
+```
+
+To use Argon2id, ensure `argon2-cffi` is installed.
 
 ---
 
-### Keyfile Mode
+## Output Modes
 
-Generate a **binary keyfile**:
+### Full 128-byte key (256 hex chars)
 
 ```bash
-python3 keyweaver.py --output-mode keyfile --keyfile my_vc.key
+--output-mode full
 ```
 
-- Writes 128 raw key bytes to `my_vc.key`.
-- The file must **not already exist** – the tool refuses to overwrite it.
-- The actual key material is **not printed** (by design).
+### VeraCrypt-compatible 32-byte key (64 hex chars)
 
-To recreate the same keyfile later:
+```bash
+--veracrypt
+```
 
-- Use **the same two passphrases**, and  
-- Use **the same KDF options** (`--kdf`, `--pbkdf2-iter` OR `--scrypt-*`).
+or:
+
+```bash
+--output-mode veracrypt
+```
+
+### Write raw binary keyfile
+
+```bash
+--output-mode keyfile --keyfile path/to/keyfile.bin
+```
+
+The keyfile will contain the raw derived key bytes.
 
 ---
 
-### Clipboard Mode
-
-Copy the derived key to the clipboard without printing it to stdout:
-
-```bash
-# Example: get a 64-char VeraCrypt password into clipboard
-python3 keyweaver.py --veracrypt --copy
-```
-
-Behavior:
-
-- On **WSL**: uses `clip.exe`
-- On **Windows**: uses `clip`
-- On **macOS**: uses `pbcopy`
-- On **Linux desktop**: uses `xclip` or `xsel` if available
-
-If clipboard integration fails, an error is shown and the process exits.
-
-> Note: `--copy` cannot be used with `--output-mode keyfile` (there is nothing textual to copy).
-
----
-
-## Command-Line Options
-
-### KDF Selection
-
-```bash
---kdf {pbkdf2,scrypt}
-```
-
-- `pbkdf2` – Default. Uses PBKDF2-HMAC-SHA512.
-- `scrypt` – Memory-hard KDF with tunable parameters.
-
-#### PBKDF2 Options
-
-```bash
---pbkdf2-iter N
-```
-
-- Default: `600000` iterations.
-- Larger values = slower but stronger against brute force.
-
-#### scrypt Options
-
-```bash
---scrypt-n N
---scrypt-r R
---scrypt-p P
-```
-
-Defaults:
-
-- `--scrypt-n 16384`  (2^14)
-- `--scrypt-r 8`
-- `--scrypt-p 1`
-
-On constrained systems, large parameters may yield a `memory limit exceeded` or similar error. In that case, try:
-
-```bash
-python3 keyweaver.py --kdf scrypt \
-  --scrypt-n 4096 --scrypt-r 4 --scrypt-p 1
-```
-
----
-
-### Output Modes
-
-```bash
---output-mode {full,veracrypt,keyfile}
-```
-
-| Mode        | Description                                            | Size                      |
-|------------|--------------------------------------------------------|---------------------------|
-| `full`     | 256 hex chars (128 bytes of key material)              | 256 hex characters        |
-| `veracrypt`| First 64 hex chars of the full key (VeraCrypt-friendly)| 64 hex characters (32 B)  |
-| `keyfile`  | Raw 128-byte key written directly to a binary file     | 128 bytes (binary file)   |
-
-Shorthand:
-
-```bash
---veracrypt  # equivalent to --output-mode veracrypt
-```
-
-Keyfile-specific:
-
-```bash
---keyfile PATH
-```
-
-Required when using `--output-mode keyfile`.
-
----
-
-### Behavior Flags
+## Clipboard Mode
 
 ```bash
 --copy
 ```
 
-- Copy the derived key to clipboard instead of printing it.
-- Not allowed with `--output-mode keyfile`.
+Copies the derived key to the system clipboard instead of printing it.
+
+Works on:
+
+- Linux (with `xclip` or `xsel`)
+- macOS (`pbcopy`)
+- Windows (`clip`)
+- WSL (`clip.exe`)
+
+Not available in `keyfile` mode (there is no textual key to copy).
+
+---
+
+## Quiet Mode
 
 ```bash
 --quiet
 ```
 
-- Suppresses banners and extra commentary.
-- In hex/VC modes: prints *only* the key.
-- With `--copy`: prints only a minimal success message.
+Suppresses banners and warnings.  
 
-```bash
---no-warnings
-```
-
-- Suppresses startup safety warnings.
-- **Note:** This does *not* suppress weak-passphrase warnings; those are tied to the prompts.
+- In normal modes: prints **only** the final key.  
+- With `--copy`: prints only a short success message.
 
 ---
 
-## Passphrase Strength Warnings
+# 🧠 How It Works
 
-The tool estimates passphrase strength using:
+## 1. Two-passphrase secret mixing
 
-- Detected character sets (lowercase, uppercase, digits, symbols)
-- Length of the passphrase
-- Rough entropy formula: `entropy ≈ length * log2(charspace)`
-
-If a passphrase:
-
-- Is shorter than 16 characters, **or**
-- Has estimated entropy < ~80 bits,
-
-…you’ll see a warning like:
+Each passphrase independently produces:
 
 ```text
-WARNING:
-  Passphrase #1 appears weak.
-  Length: 12 characters
-  Estimated entropy: ~52.4 bits
-  Consider a longer, more random passphrase.
+SHA3-256(passphrase)                    → 32 bytes
+BLAKE2b-256(passphrase, "VC2_PX")       → 32 bytes
+---------------------------------------------------
+Per-passphrase block                    → 64 bytes
 ```
 
-This is a **rough** heuristic, not a formal password auditor.
+Where `"VC2_P1"` and `"VC2_P2"` are distinct personalization strings.
 
----
+The two 64-byte blocks are then XOR-combined:
 
-## Security Notes
-
-- Anyone who learns:
-  - Either passphrase, **or**
-  - The derived hex key, **or**
-  - The keyfile contents
-
-  …can decrypt anything that uses that key.
-
-- Ensure your passphrases are:
-  - Long  
-  - Unique (not reused anywhere else)  
-  - High entropy (avoid dictionary phrases and clichés)
-
-- Keyfiles:
-  - Are written to disk; treat them like any other master secret.
-  - Back them up securely if you’re relying on deterministic regeneration.
-
-- The tool makes a best effort to scrub sensitive data from memory (e.g. the preimage buffer), but Python cannot guarantee full memory sanitization.
-
-- Clipboard use is convenient but risky on shared systems. Other processes or clipboard history tools might read it.
-
----
-
-## Determinism & Reproducibility
-
-The derived key depends on **all** of the following:
-
-- Passphrase #1 (exact string, including case and spacing)
-- Passphrase #2
-- KDF choice: `pbkdf2` vs `scrypt`
-- PBKDF2 iteration count **or** scrypt parameters (N, r, p)
-- Hardcoded context strings (`b"VC2PBKDF2"` / `b"VC2SCRYPT"`)
-
-If any of these change, the key changes.
-
-If all are identical, the derived key and keyfile are reproducible across machines and time (assuming the same version of the script and Python’s KDF implementations).
-
----
-
-## Exit Codes
-
-- `0` – Success
-- `1` – Misuse or runtime error:
-  - Invalid CLI combination
-  - Failed clipboard copy
-  - Failed keyfile write
-  - scrypt failure (e.g., memory constraints)
-- `1` – Also used when the user aborts with `Ctrl+C` (KeyboardInterrupt)
-
----
-
-## Disclaimer
-
-- This tool is **not** affiliated with VeraCrypt or its authors.
-- No cryptographic tool can save you from weak passphrases or bad opsec.
-- Use at your own risk; review the source code and threat model for your use case.
-
----
-
-## Detailed Description of the App (Design & Behavior)
-
-This section is more of an architectural / conceptual walkthrough than user-facing docs.
-
-### Core Idea
-
-The app’s job is to turn **two passphrases** into **high-entropy key material** in a way that is:
-
-- **Deterministic** – same inputs ⇒ same output
-- **Configurable** – adjustable KDF parameters
-- **Tool-friendly** – output can be used:
-  - As a VeraCrypt password (64 hex chars),
-  - As a raw keyfile,
-  - Or as a generic cryptographic key in other contexts.
-
-Using two passphrases lets you:
-
-- Split responsibility (e.g., two people each know one passphrase).
-- Combine a “memorized” passphrase with something written down.
-- Upgrade security by stretching two independent secrets into one strong key.
-
----
-
-### Preimage Construction
-
-Internally, the app never feeds your plain passphrases directly into the KDF.
-
-Instead, it builds a **preimage**:
-
-1. Compute SHA-512 of each passphrase (UTF-8 encoded):
-
-   ```python
-   h1 = hashlib.sha512(pass1.encode("utf-8")).digest()
-   h2 = hashlib.sha512(pass2.encode("utf-8")).digest()
-   ```
-
-2. Concatenate them into a `bytearray`:
-
-   ```python
-   preimage = bytearray(h1 + h2)
-   ```
-
-3. The original `pass1`, `pass2`, `h1`, and `h2` variables are nulled (best effort).
-
-This `preimage` is what the KDF actually sees.
-
-Why do it this way?
-
-- It normalizes the passphrases into fixed-length, high-diffusion blobs.
-- It avoids giving the KDF two separate inputs; everything is folded into one 1024-bit chunk.
-
----
-
-### Deterministic Salt Strategy
-
-The app uses a **salt**, but not a random one. It derives the salt deterministically from:
-
-- The preimage, and  
-- A context label that encodes the KDF type.
-
-For PBKDF2:
-
-```python
-context = b"VC2PBKDF2"
-pre_hash = hashlib.sha512(preimage).digest()
-salt = hashlib.sha512(context + pre_hash).digest()
+```text
+combined_block = block1 XOR block2   # 64 bytes total (512 bits)
 ```
 
-For scrypt, same idea but `context = b"VC2SCRYPT"`.
+So the intermediate secret is symmetric in both passphrases and depends on:
 
-This gives you:
+- Two different hash constructions (SHA3 + BLAKE2b)
+- Two independent secrets
+- Domain-separated personalization
 
-- Isolation between different KDFs (PBKDF2 and scrypt won’t collide).
-- A salt that is *truly derived* from the passphrases, yet stable and deterministic.
-
-The cost: there is no random per-instance salt, because reproducibility is the priority.
-
----
-
-### KDF Engines
-
-#### PBKDF2 (`derive_key_pbkdf2`)
-
-- Uses `hashlib.pbkdf2_hmac("sha512", ...)`.
-- Iteration count default: 600,000, configurable via `--pbkdf2-iter`.
-- Output length: 128 bytes (`DEFAULT_KEY_LEN_BYTES`).
-
-PBKDF2 is CPU-hard only—solid, widely supported, but not memory-hard.
-
-#### scrypt (`derive_key_scrypt`)
-
-- Uses `hashlib.scrypt(...)` with user-tunable parameters.
-- Default parameters: N=2^14, r=8, p=1.
-- Also outputs 128 bytes.
-
-If scrypt fails (e.g., due to memory constraints), the code:
-
-- Prints an error message,
-- Suggests smaller parameters when the error mentions “memory”,
-- Scrubs the preimage before re-raising the exception.
+If at least one passphrase is strong and at least one hash behaves well, the combined block remains strong.
 
 ---
 
-### Memory Hygiene
+## 2. Run the combined block through a KDF
 
-Python isn’t a low-level, constant-time cryptographic environment, but the app still tries to be reasonably hygienic:
+Depending on the `--kdf` selection:
 
-- Preimage buffer is a mutable `bytearray`.
-- After key derivation, all bytes are overwritten with zero:
+### PBKDF2-HMAC-SHA512
 
-  ```python
-  for i in range(len(preimage)):
-      preimage[i] = 0
-  preimage = None
-  ```
+- Well-known and widely supported.
+- Not memory-hard, but compatible with many environments.
 
-- Passphrase variables are nulled (`pass1 = pass2 = None`) as soon as they’re no longer needed.
+### scrypt
 
-This doesn’t guarantee that all traces vanish from memory (GC, copies, internal buffers are outside user control), but it’s better than leaving sensitive data lying around in long-lived Python objects.
+- Memory-hard, more expensive to attack with GPUs and ASICs.
+- Good upgrade over PBKDF2 where available.
 
----
+### Argon2id (Recommended)
 
-### Passphrase Strength Estimation
+- Winner of the Password Hashing Competition.
+- Hybrid defense: side-channel hardened and GPU-resistant.
+- Tunable time, memory, and parallelism parameters.
 
-`estimate_passphrase_strength` uses a very naive model:
+In all cases, the KDF uses a **deterministic salt** derived from the combined block and a domain string, so that:
 
-1. Infer the size of the character set used in the passphrase:
-   - Add 26 if any lowercase letters are present.
-   - Add 26 if any uppercase letters are present.
-   - Add 10 if digits are present.
-   - Add 32 for “symbols” (non-alphanumeric).
+```text
+same passphrases + same KDF + same parameters → same key
+```
 
-2. If for some reason it can’t classify anything, it assumes 95 printable ASCII characters.
-
-3. Entropy is estimated as:
-
-   ```python
-   entropy_bits ≈ len(pw) * log2(charspace)
-   ```
-
-4. If:
-   - `len(pw) < 16`, or
-   - `entropy_bits < 80`
-
-   …the tool prints a warning for that passphrase label.
-
-This is intentionally “loud but not strict.” It won’t block you, it just nudges you toward longer, more random passphrases.
+Final key length: **128 bytes** by default.
 
 ---
 
-### Clipboard Handling
+## 3. Output Result
 
-`copy_to_clipboard` tries to be cross-platform:
+Depending on the output mode:
 
-- First checks if we’re under WSL by reading `/proc/version` and looking for “microsoft”.
-- Then chooses the appropriate backend:
-  - WSL: `clip.exe`
-  - macOS: `pbcopy`
-  - Windows: `clip`
-  - Linux: `xclip` or `xsel`, if available
-
-It returns a boolean indicating success, so the caller can decide whether to bail with an error.
-
-If clipboard copy succeeds:
-
-- The key is **not** printed to stdout.
-- In non-quiet mode, a confirmation message is printed.
+- **Full (default)**: 128-byte key as a 256-character hex string.  
+- **VeraCrypt mode**: first 32 bytes (64 hex chars) of the key.  
+- **Keyfile mode**: raw 128-byte key written to disk as a binary file.
 
 ---
 
-### CLI Flow & Validation
+# 🔒 Security Considerations
 
-`parse_args` wires up all the flags and provides:
+- **Passphrase strength matters.**  
+  The tool will warn about clearly weak passphrases, but entropy is ultimately on the user.  
+  Use long, high-entropy, non-reused passphrases.
 
-- KDF selection and parameters
-- Output modes and shortcuts
-- Keyfile path
-- Behavior flags (`--copy`, `--quiet`, `--no-warnings`)
+- **Two-passphrase design is not “magic 2FA.”**  
+  It’s still just secrets → key derivation.  
+  However, it does hedge by requiring two independent secrets.
 
-`main()` then:
+- **Keyfiles are sensitive.**  
+  Treat them like private keys or passwords: encrypt, back up, and restrict access.
 
-1. Validates incompatible or incomplete combinations:
-   - `--output-mode keyfile` requires `--keyfile PATH`.
-   - `--copy` is disallowed with `--output-mode keyfile`.
-
-2. Prints startup warnings unless `--no-warnings` or `--quiet` is set.
-
-3. Prompts for `Passphrase #1` and `Passphrase #2`, each twice.
-
-4. Warns if the two passphrases are identical.
-
-5. Derives the key using the chosen KDF and parameters.
-
-6. Based on `output_mode`:
-   - `keyfile`: write raw bytes to disk; show summary.
-   - `full` / `veracrypt`:
-     - Convert to hex, optionally truncate, then either:
-       - Copy to clipboard (`--copy`), or
-       - Print to stdout (with or without banners depending on `--quiet`).
-
-7. Handles `KeyboardInterrupt` gracefully and exits with code 1.
+- **Deterministic design is deliberate.**  
+  This tool is **not** a password storage system. It is a **deterministic key generator**:
+  - Good for reproducible keys, vaults, or recovery setups.
+  - Not appropriate as a drop-in password hasher for user accounts.
 
 ---
 
-In short: this app is a compact, deterministic “key factory” that uses two passphrases as raw material, runs them through SHA-512 + PBKDF2 or scrypt, and gives you either a hex string or a keyfile suitable for VeraCrypt and similar tools—while nagging you gently if your passphrases look weak.
+# 🧪 Example Commands
+
+### Generate VeraCrypt password using Argon2id
+
+```bash
+python3 keyweaver.py --kdf argon2id --veracrypt
+```
+
+### Generate full key and copy to clipboard
+
+```bash
+python3 keyweaver.py --kdf scrypt --copy
+```
+
+### Create a binary keyfile
+
+```bash
+python3 keyweaver.py --output-mode keyfile --keyfile secret.key
+```
+
+### High-memory Argon2id configuration
+
+```bash
+python3 keyweaver.py --kdf argon2id --argon2-m 262144 --argon2-t 4 --argon2-p 2
+```
+
+---
+
+# 📁 Project Structure
+
+```text
+keyweaver.py       # Main CLI tool
+requirements.txt   # Python dependencies
+README.md          # This documentation
+```
+
+---
+
+# 📜 License
+
+This project is licensed under the **MIT License**.  
+You are free to use, modify, and distribute it, subject to the terms of the license.
+
+---
+
+# 🙌 Contributions
+
+Pull requests and suggestions are welcome.
+
+Ideas for contributions:
+
+- Add test vectors and self-test mode
+- Benchmark different KDF parameters
+- Add configuration presets (e.g. "laptop", "server", "HSM")
+- Package as a Python module with an importable API
+
+Happy key weaving. 🔑🧶
