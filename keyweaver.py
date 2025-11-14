@@ -6,72 +6,62 @@ OVERVIEW
 ========
 This tool derives high-entropy key material from TWO independent passphrases.
 
-Workflow:
-  1. Prompt for "Passphrase #1" (with confirmation)
-  2. Prompt for "Passphrase #2" (with confirmation)
-  3. Compute:
-       preimage = SHA-512(pass1) || SHA-512(pass2)
-  4. Run a KDF (PBKDF2-HMAC-SHA512 by default, or scrypt if requested)
-  5. Use the derived bytes in one of several output modes.
+High-level workflow:
+
+  1. Prompt for Passphrase #1 (with confirmation)
+  2. Prompt for Passphrase #2 (with confirmation)
+
+  3. Build a 512-bit combined secret block from both passphrases:
+
+       block_for_p1 = SHA3-256(p1) concatenated with
+                      BLAKE2b-256(p1, personalization="VC2_P1")
+
+       block_for_p2 = SHA3-256(p2) concatenated with
+                      BLAKE2b-256(p2, personalization="VC2_P2")
+
+       combined_block = XOR(block_for_p1, block_for_p2)
+
+     Each passphrase is processed independently.
+     Each uses two hash constructions.
+     Personalization strings provide domain separation.
+
+  4. Run KDF (PBKDF2-HMAC-SHA512, scrypt, or Argon2id) over the combined block:
+
+         final_key = KDF(combined_block, deterministic_salt, ...)
+
+  5. Output key material in hex or as a binary keyfile.
 
 OUTPUT MODES
 ============
 
-  --output-mode full       (default)
-      * Outputs a full 256-character hex key (128 bytes of key material).
-      * Printed to stdout (or copied with --copy).
-
-  --output-mode veracrypt  (or just use --veracrypt)
-      * Outputs the FIRST 64 hexadecimal characters (32 bytes).
-      * This matches the maximum VeraCrypt password length (64 chars).
-      * Printed to stdout (or copied with --copy).
-
-  --output-mode keyfile --keyfile PATH
-      * Writes the raw key bytes directly to a binary file at PATH.
-      * Designed for use as a VeraCrypt keyfile.
-      * SAME passphrases + SAME KDF options => SAME keyfile contents.
-      * Key material is not printed; it only goes to the file.
+  --output-mode full        → full 128-byte key (256 hex chars)
+  --output-mode veracrypt   → first 32 bytes (64 hex chars)
+  --output-mode keyfile     → write raw key bytes to file
 
 KDF OPTIONS
 ===========
 
-  --kdf pbkdf2   (default)
-      * Uses PBKDF2-HMAC-SHA512.
-      * Tunable with --pbkdf2-iter (default: 600000 iterations).
+  PBKDF2:
+    --kdf pbkdf2 (default)
+    --pbkdf2-iter N          (default 600000)
 
-  --kdf scrypt
-      * Uses scrypt (memory-hard).
-      * Parameters: --scrypt-n, --scrypt-r, --scrypt-p
-      * On constrained systems, large N/r/p may cause "memory limit exceeded".
+  scrypt:
+    --kdf scrypt
+    --scrypt-n N             (CPU/memory cost, default 2^14)
+    --scrypt-r R             (block size, default 8)
+    --scrypt-p P             (parallelism, default 1)
 
-CLIPBOARD SUPPORT
-=================
-  --copy
-      * Copies the derived key to the system clipboard instead of printing it.
-      * Works on:
-          - Linux desktop (xclip/xsel if available)
-          - macOS (pbcopy)
-          - Windows (clip)
-          - WSL (clip.exe)
-      * Not allowed together with --output-mode keyfile (nothing to copy).
-
-OTHER FLAGS
-===========
-
-  --quiet
-      * Suppresses banners and extra information; prints ONLY the key
-        (or only a success message when using --copy).
-
-  --no-warnings
-      * Suppresses safety warnings at startup.
+  Argon2id:
+    --kdf argon2id
+    --argon2-m MEM_KIB       (memory cost in KiB, default 65536 = 64 MiB)
+    --argon2-t T             (time cost / iterations, default 3)
+    --argon2-p P             (parallelism, default 1)
 
 SECURITY NOTES
 ==============
-  - Anyone who learns the passphrases OR the derived key/keyfile can decrypt
-    anything protected with it.
-  - Passphrase entropy is critical. Use long, non-reused, high-entropy phrases.
-  - In keyfile mode, the keyfile is written to disk: store and back it up
-    like any other critical secret.
+  - Anyone who learns either passphrase, or the final key, can decrypt.
+  - Use long, high-entropy, non-reused passphrases.
+  - In keyfile mode, the keyfile must be protected like any secret.
 """
 
 import argparse
@@ -83,246 +73,253 @@ import os
 import subprocess
 import shutil
 
+# Argon2id (optional dependency)
+try:
+    from argon2.low_level import Type as Argon2Type, hash_secret_raw as argon2_hash_secret_raw
+    ARGON2_AVAILABLE = True
+except ImportError:
+    ARGON2_AVAILABLE = False
+
 
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
 
-DEFAULT_KEY_LEN_BYTES = 128   # 128 bytes → 256 hex chars
-DEFAULT_PBKDF2_ITER   = 600_000
+DEFAULT_KEY_LENGTH_BYTES = 128
+DEFAULT_PBKDF2_ITERATIONS = 600_000
 
-# Conservative scrypt defaults; you can override them via CLI
-DEFAULT_SCRYPT_N      = 2**14
-DEFAULT_SCRYPT_R      = 8
-DEFAULT_SCRYPT_P      = 1
+DEFAULT_SCRYPT_N = 2**14
+DEFAULT_SCRYPT_R = 8
+DEFAULT_SCRYPT_P = 1
+
+# Argon2id defaults (memory in KiB)
+DEFAULT_ARGON2_MEMORY_KIB = 64 * 1024   # 64 MiB
+DEFAULT_ARGON2_TIME_COST = 3
+DEFAULT_ARGON2_PARALLELISM = 1
 
 
 # ---------------------------------------------------------------------------
-# Entropy estimation and passphrase warnings
+# Passphrase Strength Warnings
 # ---------------------------------------------------------------------------
 
-def estimate_passphrase_strength(pw: str) -> float:
-    """Extremely rough entropy estimate in bits based on charset and length."""
-    if not pw:
+def estimate_passphrase_entropy_bits(passphrase: str) -> float:
+    if not passphrase:
         return 0.0
 
-    charspace = 0
-    if any("a" <= c <= "z" for c in pw):
-        charspace += 26
-    if any("A" <= c <= "Z" for c in pw):
-        charspace += 26
-    if any("0" <= c <= "9" for c in pw):
-        charspace += 10
-    if any(not c.isalnum() for c in pw):
-        charspace += 32
-    if charspace == 0:
-        charspace = 95  # printable ASCII
+    charset_size = 0
+    if any("a" <= c <= "z" for c in passphrase):
+        charset_size += 26
+    if any("A" <= c <= "Z" for c in passphrase):
+        charset_size += 26
+    if any("0" <= c <= "9" for c in passphrase):
+        charset_size += 10
+    if any(not c.isalnum() for c in passphrase):
+        charset_size += 32
+    if charset_size == 0:
+        charset_size = 95
 
-    return len(pw) * math.log2(charspace)
+    return len(passphrase) * math.log2(charset_size)
 
 
-def warn_if_weak(passphrase: str, label: str) -> None:
-    bits = estimate_passphrase_strength(passphrase)
+def warn_if_passphrase_weak(passphrase: str, label: str) -> None:
+    bits = estimate_passphrase_entropy_bits(passphrase)
+
     if len(passphrase) < 16 or bits < 80:
         print("WARNING:", file=sys.stderr)
-        print("  {} appears weak.".format(label), file=sys.stderr)
-        print("  Length: {} characters".format(len(passphrase)), file=sys.stderr)
-        print("  Estimated entropy: ~{:.1f} bits".format(bits), file=sys.stderr)
-        print("  Consider a longer, more random passphrase.\n", file=sys.stderr)
+        print(f"  {label} appears weak.", file=sys.stderr)
+        print(f"  Length: {len(passphrase)} characters", file=sys.stderr)
+        print(f"  Estimated entropy: {bits:.1f} bits\n", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
 # Prompting
 # ---------------------------------------------------------------------------
 
-def prompt_passphrase(label: str) -> str:
-    """Prompt for a passphrase twice, confirm, and warn if weak."""
+def prompt_for_passphrase(label: str) -> str:
     while True:
-        p1 = getpass.getpass("Enter {}: ".format(label))
-        p2 = getpass.getpass("Re-enter {}: ".format(label))
+        passphrase_first = getpass.getpass(f"Enter {label}: ")
+        passphrase_second = getpass.getpass(f"Re-enter {label}: ")
 
-        if p1 != p2:
+        if passphrase_first != passphrase_second:
             print("Passphrases do not match.\n", file=sys.stderr)
             continue
-
-        if not p1:
+        if not passphrase_first:
             print("Passphrase cannot be empty.\n", file=sys.stderr)
             continue
 
-        warn_if_weak(p1, label)
-        return p1
+        warn_if_passphrase_weak(passphrase_first, label)
+        return passphrase_first
 
 
 # ---------------------------------------------------------------------------
-# Preimage construction: SHA-512(pass1) || SHA-512(pass2)
+# Two-Passphrase SHA3+BLAKE2 Combiner
 # ---------------------------------------------------------------------------
 
-def _make_preimage(pass1: str, pass2: str) -> bytearray:
-    """Hash both passphrases and concatenate into a mutable buffer."""
-    h1 = hashlib.sha512(pass1.encode("utf-8")).digest()
-    h2 = hashlib.sha512(pass2.encode("utf-8")).digest()
+def build_two_passphrase_combined_block_sha3_blake2(passphrase_one: str, passphrase_two: str) -> bytes:
+    """
+    Returns a 512-bit block:
 
-    preimage = bytearray(h1 + h2)
+        XOR(
+            SHA3-256(passphrase_one) || BLAKE2b-256(passphrase_one),
+            SHA3-256(passphrase_two) || BLAKE2b-256(passphrase_two)
+        )
+    """
+    def block_for_passphrase(passphrase: str, personalization: bytes) -> bytes:
+        passphrase_bytes = passphrase.encode("utf-8")
 
-    # Scrub originals (best effort in Python)
-    pass1 = pass2 = None
-    h1 = h2 = None
-    return preimage
+        sha3_part = hashlib.sha3_256(passphrase_bytes).digest()
+        blake2_part = hashlib.blake2b(
+            passphrase_bytes,
+            digest_size=32,
+            person=personalization,
+        ).digest()
+
+        return sha3_part + blake2_part
+
+    block_one = block_for_passphrase(passphrase_one, b"VC2_P1")
+    block_two = block_for_passphrase(passphrase_two, b"VC2_P2")
+
+    combined_block = bytes(a ^ b for a, b in zip(block_one, block_two))
+
+    return combined_block
 
 
 # ---------------------------------------------------------------------------
-# KDFs
+# KDF layers
 # ---------------------------------------------------------------------------
 
-def derive_key_pbkdf2(pass1: str, pass2: str, iterations: int, key_len_bytes: int) -> bytes:
-    """Derive key using PBKDF2-HMAC-SHA512."""
-    preimage = _make_preimage(pass1, pass2)
+def derive_final_key_with_pbkdf2(combined_block: bytes, iterations: int, output_length_bytes: int) -> bytes:
+    salt = hashlib.sha512(b"VC2_PBKDF2_SALT" + combined_block).digest()
 
-    # Deterministic salt from context + hash(preimage)
-    context = b"VC2PBKDF2"
-    pre_hash = hashlib.sha512(preimage).digest()
-    salt = hashlib.sha512(context + pre_hash).digest()
-
-    key_bytes = hashlib.pbkdf2_hmac(
+    return hashlib.pbkdf2_hmac(
         "sha512",
-        preimage,
+        combined_block,
         salt,
         iterations,
-        dklen=key_len_bytes,
+        dklen=output_length_bytes,
     )
 
-    # Scrub preimage
-    for i in range(len(preimage)):
-        preimage[i] = 0
-    preimage = None
 
-    return key_bytes
+def derive_final_key_with_scrypt(
+    combined_block: bytes,
+    cost_n: int,
+    cost_r: int,
+    cost_p: int,
+    output_length_bytes: int,
+) -> bytes:
+    salt = hashlib.sha512(b"VC2_SCRYPT_SALT" + combined_block).digest()
+
+    return hashlib.scrypt(
+        combined_block,
+        salt=salt,
+        n=cost_n,
+        r=cost_r,
+        p=cost_p,
+        dklen=output_length_bytes,
+    )
 
 
-def derive_key_scrypt(pass1: str, pass2: str, n: int, r: int, p: int, key_len_bytes: int) -> bytes:
-    """Derive key using scrypt. May fail on low-memory or restricted systems."""
-    preimage = _make_preimage(pass1, pass2)
-
-    context = b"VC2SCRYPT"
-    pre_hash = hashlib.sha512(preimage).digest()
-    salt = hashlib.sha512(context + pre_hash).digest()
-
-    try:
-        key_bytes = hashlib.scrypt(
-            preimage,
-            salt=salt,
-            n=n,
-            r=r,
-            p=p,
-            dklen=key_len_bytes,
+def derive_final_key_with_argon2id(
+    combined_block: bytes,
+    memory_kib: int,
+    time_cost: int,
+    parallelism: int,
+    output_length_bytes: int,
+) -> bytes:
+    if not ARGON2_AVAILABLE:
+        print(
+            "ERROR: Argon2id requested but argon2-cffi is not installed.\n"
+            "       Install with: pip install argon2-cffi",
+            file=sys.stderr,
         )
-    except ValueError as e:
-        print("ERROR: scrypt key derivation failed.", file=sys.stderr)
-        msg = str(e).lower()
-        if "memory" in msg:
-            print("  Memory limit exceeded or too little available.", file=sys.stderr)
-            print("  Try smaller parameters, e.g.: --scrypt-n 4096 --scrypt-r 4 --scrypt-p 1", file=sys.stderr)
-        else:
-            print("  Details: {}".format(e), file=sys.stderr)
-        # Scrub preimage before exiting
-        for i in range(len(preimage)):
-            preimage[i] = 0
-        preimage = None
-        raise
+        sys.exit(1)
 
-    # Scrub preimage
-    for i in range(len(preimage)):
-        preimage[i] = 0
-    preimage = None
+    salt = hashlib.sha512(b"VC2_ARGON2ID_SALT" + combined_block).digest()
 
-    return key_bytes
+    return argon2_hash_secret_raw(
+        secret=combined_block,
+        salt=salt,
+        time_cost=time_cost,
+        memory_cost=memory_kib,
+        parallelism=parallelism,
+        hash_len=output_length_bytes,
+        type=Argon2Type.ID,
+    )
 
 
 # ---------------------------------------------------------------------------
-# Clipboard handling (Linux, macOS, Windows, WSL)
+# Clipboard
 # ---------------------------------------------------------------------------
 
 def running_under_wsl() -> bool:
-    """Detect WSL by inspecting /proc/version."""
     try:
-        with open("/proc/version", "r") as f:
-            return "microsoft" in f.read().lower()
+        with open("/proc/version", "r") as version_file:
+            return "microsoft" in version_file.read().lower()
     except Exception:
         return False
 
 
-def copy_to_clipboard(data: str) -> bool:
-    """
-    Copy text to the system clipboard.
-
-    Supports:
-      - WSL (clip.exe)
-      - Windows (clip)
-      - macOS (pbcopy)
-      - Linux desktop (xclip or xsel if installed)
-
-    Returns True on success, False on failure.
-    """
+def copy_text_to_clipboard(text: str) -> bool:
     try:
-        # WSL: use Windows' clip.exe
         if running_under_wsl():
-            p = subprocess.Popen(["clip.exe"], stdin=subprocess.PIPE)
-            p.communicate(input=data.encode("utf-8"))
-            return p.returncode == 0
+            process = subprocess.Popen(["clip.exe"], stdin=subprocess.PIPE)
+            process.communicate(text.encode())
+            return process.returncode == 0
 
-        # macOS
         if sys.platform == "darwin":
-            p = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
-            p.communicate(input=data.encode("utf-8"))
-            return p.returncode == 0
+            process = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
+            process.communicate(text.encode())
+            return process.returncode == 0
 
-        # Native Windows (non-WSL)
         if sys.platform.startswith("win"):
-            p = subprocess.Popen(["clip"], stdin=subprocess.PIPE)
-            p.communicate(input=data.encode("utf-8"))
-            return p.returncode == 0
+            process = subprocess.Popen(["clip"], stdin=subprocess.PIPE)
+            process.communicate(text.encode())
+            return process.returncode == 0
 
-        # Linux / Unix desktop: try xclip
         if shutil.which("xclip"):
-            p = subprocess.Popen(["xclip", "-selection", "clipboard"], stdin=subprocess.PIPE)
-            p.communicate(input=data.encode("utf-8"))
-            return p.returncode == 0
+            process = subprocess.Popen(
+                ["xclip", "-selection", "clipboard"],
+                stdin=subprocess.PIPE,
+            )
+            process.communicate(text.encode())
+            return process.returncode == 0
 
-        # Fallback: try xsel
         if shutil.which("xsel"):
-            p = subprocess.Popen(["xsel", "--clipboard", "--input"], stdin=subprocess.PIPE)
-            p.communicate(input=data.encode("utf-8"))
-            return p.returncode == 0
+            process = subprocess.Popen(
+                ["xsel", "--clipboard", "--input"],
+                stdin=subprocess.PIPE,
+            )
+            process.communicate(text.encode())
+            return process.returncode == 0
 
         return False
-
     except Exception:
         return False
 
 
 # ---------------------------------------------------------------------------
-# Argument parsing
+# Argument Parsing
 # ---------------------------------------------------------------------------
 
-def parse_args() -> argparse.Namespace:
+def parse_command_line_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Deterministic two-passphrase key generator for VeraCrypt.",
+        description="Two-passphrase deterministic key generator.",
     )
 
     # KDF selection
     parser.add_argument(
         "--kdf",
-        choices=["pbkdf2", "scrypt"],
+        choices=["pbkdf2", "scrypt", "argon2id"],
         default="pbkdf2",
-        help="Which KDF to use (default: pbkdf2).",
+        help="KDF to use: pbkdf2 (default), scrypt, or argon2id.",
     )
 
     # PBKDF2 options
     parser.add_argument(
         "--pbkdf2-iter",
         type=int,
-        default=DEFAULT_PBKDF2_ITER,
-        help="PBKDF2 iteration count (default: {}).".format(DEFAULT_PBKDF2_ITER),
+        default=DEFAULT_PBKDF2_ITERATIONS,
+        help=f"PBKDF2 iteration count (default {DEFAULT_PBKDF2_ITERATIONS}).",
     )
 
     # scrypt options
@@ -330,19 +327,39 @@ def parse_args() -> argparse.Namespace:
         "--scrypt-n",
         type=int,
         default=DEFAULT_SCRYPT_N,
-        help="scrypt N parameter (CPU/memory cost, default: {}).".format(DEFAULT_SCRYPT_N),
+        help=f"scrypt N parameter (CPU/memory cost, default {DEFAULT_SCRYPT_N}).",
     )
     parser.add_argument(
         "--scrypt-r",
         type=int,
         default=DEFAULT_SCRYPT_R,
-        help="scrypt r parameter (block size, default: {}).".format(DEFAULT_SCRYPT_R),
+        help=f"scrypt r parameter (block size, default {DEFAULT_SCRYPT_R}).",
     )
     parser.add_argument(
         "--scrypt-p",
         type=int,
         default=DEFAULT_SCRYPT_P,
-        help="scrypt p parameter (parallelism, default: {}).".format(DEFAULT_SCRYPT_P),
+        help=f"scrypt p parameter (parallelism, default {DEFAULT_SCRYPT_P}).",
+    )
+
+    # Argon2id options
+    parser.add_argument(
+        "--argon2-m",
+        type=int,
+        default=DEFAULT_ARGON2_MEMORY_KIB,
+        help=f"Argon2id memory cost in KiB (default {DEFAULT_ARGON2_MEMORY_KIB}).",
+    )
+    parser.add_argument(
+        "--argon2-t",
+        type=int,
+        default=DEFAULT_ARGON2_TIME_COST,
+        help=f"Argon2id time cost / iterations (default {DEFAULT_ARGON2_TIME_COST}).",
+    )
+    parser.add_argument(
+        "--argon2-p",
+        type=int,
+        default=DEFAULT_ARGON2_PARALLELISM,
+        help=f"Argon2id parallelism (default {DEFAULT_ARGON2_PARALLELISM}).",
     )
 
     # Output mode
@@ -350,24 +367,21 @@ def parse_args() -> argparse.Namespace:
         "--output-mode",
         choices=["full", "veracrypt", "keyfile"],
         default="full",
-        help="full = 256 hex chars; veracrypt = first 64 hex chars; keyfile = write raw bytes to file.",
+        help="Output format: full (default), veracrypt, or keyfile.",
     )
 
-    # Shortcut alias for veracrypt output mode
     parser.add_argument(
         "--veracrypt",
         action="store_true",
         help="Shortcut for --output-mode veracrypt.",
     )
 
-    # Keyfile path (used only in keyfile mode)
     parser.add_argument(
         "--keyfile",
         type=str,
         help="Path to write keyfile when using --output-mode keyfile.",
     )
 
-    # Behavior flags
     parser.add_argument(
         "--copy",
         action="store_true",
@@ -386,7 +400,6 @@ def parse_args() -> argparse.Namespace:
 
     args = parser.parse_args()
 
-    # Map shorthand flag to proper mode
     if args.veracrypt:
         args.output_mode = "veracrypt"
 
@@ -398,91 +411,100 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    args = parse_args()
+    args = parse_command_line_arguments()
 
-    # Basic validation
     if args.output_mode == "keyfile" and not args.keyfile:
-        print("ERROR: --output-mode keyfile requires --keyfile PATH", file=sys.stderr)
+        print("ERROR: --output-mode keyfile requires --keyfile PATH.", file=sys.stderr)
         sys.exit(1)
 
     if args.output_mode == "keyfile" and args.copy:
-        print("ERROR: --copy cannot be used with --output-mode keyfile (nothing to copy).", file=sys.stderr)
+        print("ERROR: --copy cannot be used with --output-mode keyfile.", file=sys.stderr)
         sys.exit(1)
 
     if not args.no_warnings and not args.quiet:
-        print("WARNING: This tool derives sensitive key material.", file=sys.stderr)
-        if args.output_mode == "keyfile":
-            print("  Keyfile will be written to disk at: {}".format(args.keyfile), file=sys.stderr)
-        else:
-            print("  Key will be shown on stdout unless --copy is used.", file=sys.stderr)
-        print("", file=sys.stderr)
+        print("WARNING: This tool derives sensitive key material.\n", file=sys.stderr)
 
     try:
-        # Collect passphrases
-        pass1 = prompt_passphrase("Passphrase #1")
-        pass2 = prompt_passphrase("Passphrase #2")
+        passphrase_one = prompt_for_passphrase("Passphrase #1")
+        passphrase_two = prompt_for_passphrase("Passphrase #2")
 
-        if pass1 == pass2:
-            print("WARNING: Passphrase #1 and #2 are identical.\n", file=sys.stderr)
+        if passphrase_one == passphrase_two:
+            print("WARNING: Passphrases #1 and #2 are identical.\n", file=sys.stderr)
 
-        # Derive key
+        combined_block = build_two_passphrase_combined_block_sha3_blake2(
+            passphrase_one,
+            passphrase_two,
+        )
+        passphrase_one = None
+        passphrase_two = None
+
         if args.kdf == "pbkdf2":
-            key_bytes = derive_key_pbkdf2(pass1, pass2, args.pbkdf2_iter, DEFAULT_KEY_LEN_BYTES)
-        else:
-            key_bytes = derive_key_scrypt(pass1, pass2, args.scrypt_n, args.scrypt_r, args.scrypt_p, DEFAULT_KEY_LEN_BYTES)
+            key_bytes = derive_final_key_with_pbkdf2(
+                combined_block,
+                args.pbkdf2_iter,
+                DEFAULT_KEY_LENGTH_BYTES,
+            )
+        elif args.kdf == "scrypt":
+            key_bytes = derive_final_key_with_scrypt(
+                combined_block,
+                args.scrypt_n,
+                args.scrypt_r,
+                args.scrypt_p,
+                DEFAULT_KEY_LENGTH_BYTES,
+            )
+        else:  # argon2id
+            key_bytes = derive_final_key_with_argon2id(
+                combined_block,
+                args.argon2_m,
+                args.argon2_t,
+                args.argon2_p,
+                DEFAULT_KEY_LENGTH_BYTES,
+            )
 
-        # Drop passphrases ASAP
-        pass1 = pass2 = None
+        combined_block = None
 
-        # Handle keyfile mode
         if args.output_mode == "keyfile":
             if os.path.exists(args.keyfile):
-                print("ERROR: Keyfile already exists: {}".format(args.keyfile), file=sys.stderr)
-                print("       Move or delete it before creating a new one.", file=sys.stderr)
+                print(
+                    f"ERROR: Keyfile already exists: {args.keyfile}",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
+
             try:
-                with open(args.keyfile, "wb") as f:
-                    f.write(key_bytes)
-            except OSError as e:
-                print("ERROR: Failed to write keyfile: {}".format(e), file=sys.stderr)
+                with open(args.keyfile, "wb") as keyfile_handle:
+                    keyfile_handle.write(key_bytes)
+            except OSError as error:
+                print(f"ERROR: Failed to write keyfile: {error}", file=sys.stderr)
                 sys.exit(1)
 
             if not args.quiet:
-                print("Keyfile written to: {}".format(args.keyfile))
-                print("Keyfile size: {} bytes".format(len(key_bytes)))
-                print("Same passphrases + same KDF settings will recreate this file.", file=sys.stderr)
+                print(f"Keyfile written: {args.keyfile}")
+                print(f"Size: {len(key_bytes)} bytes", file=sys.stderr)
             return
 
-        # Non-keyfile: hex output
         key_hex = key_bytes.hex()
-        if args.output_mode == "veracrypt":
-            key_out = key_hex[:64]  # 64 hex chars → 32 bytes
-        else:
-            key_out = key_hex       # full 256 hex chars
 
-        # If --copy, send to clipboard and do NOT print the key
+        if args.output_mode == "veracrypt":
+            key_hex = key_hex[:64]
+
         if args.copy:
-            ok = copy_to_clipboard(key_out)
-            if not ok:
-                print("ERROR: Failed to copy to clipboard. Install xclip/xsel (Linux) or ensure clipboard tools are available.", file=sys.stderr)
+            if not copy_text_to_clipboard(key_hex):
+                print("ERROR: Failed to copy to clipboard.", file=sys.stderr)
                 sys.exit(1)
             if not args.quiet:
-                print("Key copied to clipboard. (Not printed.)")
+                print("Key copied to clipboard.")
             return
 
-        # Otherwise, print to stdout
         if args.quiet:
-            print(key_out)
+            print(key_hex)
         else:
             print("\n=== DERIVED KEY ===")
-            print(key_out)
+            print(key_hex)
             print("===================")
 
     except KeyboardInterrupt:
-        print("\nAborted by user.", file=sys.stderr)
-        sys.exit(1)
-    except ValueError:
-        # scrypt failures or other KDF-related issues are already logged
+        print("\nAborted.", file=sys.stderr)
         sys.exit(1)
 
 
