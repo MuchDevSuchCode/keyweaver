@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark light" />
+  <meta name="description" content="KeyWeaver — two-passphrase deterministic cryptographic key generator with PBKDF2, scrypt, and Argon2id." />
+  <title>KeyWeaver — Two-Passphrase Deterministic Key Generator</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <header class="site-header" role="banner">
+    <a href="#top" class="brand" aria-label="KeyWeaver home">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M16 3 L28 9 V19 C28 24 22 28 16 30 C10 28 4 24 4 19 V9 Z"
+              fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+        <circle cx="16" cy="14" r="3" fill="none" stroke="currentColor" stroke-width="2"/>
+        <path d="M16 17 L16 23 M14 21 L18 21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <span>KeyWeaver</span>
+    </a>
+
+    <nav class="site-nav" aria-label="Primary">
+      <a href="#features">Features</a>
+      <a href="#how">How it works</a>
+      <a href="#install">Install</a>
+      <a href="#kdf">KDFs</a>
+      <a href="#security">Security</a>
+    </nav>
+
+    <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark/light theme" type="button">
+      <span class="theme-icon" aria-hidden="true">◐</span>
+    </button>
+  </header>
+
+  <main id="top">
+
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-inner">
+        <h1 id="hero-title">
+          Two passphrases.<br />
+          <span class="accent">One repeatable key.</span>
+        </h1>
+        <p class="hero-subtitle">
+          KeyWeaver derives the same high-entropy cryptographic key from the same two
+          passphrases — every time, on any machine. No salt to lose. No keyfile to back up.
+          Just the recipe.
+        </p>
+        <div class="hero-cta">
+          <a class="btn btn-primary" href="#install">Get started</a>
+          <a class="btn btn-ghost" href="https://github.com/MuchDevSuchCode/KeyWeaver">View on GitHub →</a>
+        </div>
+
+        <pre class="hero-snippet" aria-label="Quick example"><code><span class="cmt"># Derive a VeraCrypt-compatible key with Argon2id</span>
+<span class="cmd">python keyweaver.py --kdf argon2id --veracrypt --fingerprint</span></code></pre>
+      </div>
+    </section>
+
+    <section id="features" class="features" aria-labelledby="features-title">
+      <h2 id="features-title">Why KeyWeaver</h2>
+      <div class="grid">
+        <article class="card">
+          <div class="card-icon" aria-hidden="true">⌬</div>
+          <h3>Two-secret combiner</h3>
+          <p>SHA3-256 and BLAKE2b-256 are computed independently per passphrase, then XOR-mixed with domain separation.</p>
+        </article>
+        <article class="card">
+          <div class="card-icon" aria-hidden="true">⊞</div>
+          <h3>Three modern KDFs</h3>
+          <p>Choose PBKDF2-SHA512 for portability, scrypt for memory hardness, or Argon2id for the modern best practice.</p>
+        </article>
+        <article class="card">
+          <div class="card-icon" aria-hidden="true">≡</div>
+          <h3>Fully deterministic</h3>
+          <p>Same passphrases plus the same parameters always produce the same key. Re-derive on any machine, any time.</p>
+        </article>
+        <article class="card">
+          <div class="card-icon" aria-hidden="true">◈</div>
+          <h3>VeraCrypt-ready</h3>
+          <p>Output as full hex, 32-byte VeraCrypt hex, or a binary keyfile written with restrictive permissions.</p>
+        </article>
+        <article class="card">
+          <div class="card-icon" aria-hidden="true">◐</div>
+          <h3>CLI and GUI</h3>
+          <p>Scriptable command line for automation. Tkinter GUI for one-off derivations — no extra dependencies.</p>
+        </article>
+        <article class="card">
+          <div class="card-icon" aria-hidden="true">⚐</div>
+          <h3>Safety guards</h3>
+          <p>Strength meter, minimum-entropy enforcement, clipboard auto-clear, atomic keyfile writes, and a one-way fingerprint for cross-checks.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="how" class="how" aria-labelledby="how-title">
+      <h2 id="how-title">How it works</h2>
+      <p class="lead">
+        Two passphrases pass through independent two-hash constructions, are
+        XOR-combined with domain separation, then stretched through a memory-hard KDF.
+      </p>
+
+      <div class="diagram" aria-label="Cryptographic flow diagram">
+        <div class="diagram-row">
+          <div class="d-node">Passphrase&nbsp;1</div>
+          <div class="d-node">Passphrase&nbsp;2</div>
+        </div>
+        <div class="diagram-arrows" aria-hidden="true">
+          <span>↓</span><span>↓</span>
+        </div>
+        <div class="diagram-row">
+          <div class="d-node d-node-hash">SHA3-256 ‖ BLAKE2b<small>person = VC2_P1</small></div>
+          <div class="d-node d-node-hash">SHA3-256 ‖ BLAKE2b<small>person = VC2_P2</small></div>
+        </div>
+        <div class="diagram-arrows" aria-hidden="true"><span>↘</span><span>↙</span></div>
+        <div class="d-node d-node-xor">XOR — combined block (64 bytes)</div>
+        <div class="diagram-arrows" aria-hidden="true"><span>↓</span></div>
+        <div class="d-node d-node-kdf">KDF stretch (PBKDF2 / scrypt / Argon2id)</div>
+        <div class="diagram-arrows" aria-hidden="true"><span>↓</span></div>
+        <div class="d-node d-node-out">Final key — 128 bytes</div>
+      </div>
+
+      <ol class="steps">
+        <li><strong>Two-hash construction.</strong> SHA3-256 and BLAKE2b-256 are unrelated families; concatenating their digests gives 64 bytes of mixed material per passphrase.</li>
+        <li><strong>Personalization.</strong> BLAKE2b's <code>person</code> parameter is <code>VC2_P1</code> for the first passphrase and <code>VC2_P2</code> for the second, so swapping inputs yields a different key.</li>
+        <li><strong>XOR combiner.</strong> The two 64-byte blocks are XORed. The result inherits the entropy of the strongest input.</li>
+        <li><strong>Deterministic salt.</strong> Salt = <code>SHA512(label ‖ combined_block)</code>, preserving determinism.</li>
+        <li><strong>KDF stretch.</strong> PBKDF2-SHA512, scrypt, or Argon2id is run over the combined block to produce the final 128-byte key.</li>
+      </ol>
+    </section>
+
+    <section id="install" class="install" aria-labelledby="install-title">
+      <h2 id="install-title">Install</h2>
+      <p>Python 3.8 or newer. The Argon2id KDF requires <code>argon2-cffi</code>, which is included in the requirements file.</p>
+
+      <pre class="snippet"><code><span class="cmt"># Clone</span>
+<span class="cmd">git clone https://github.com/MuchDevSuchCode/KeyWeaver.git</span>
+<span class="cmd">cd keyweaver</span>
+
+<span class="cmt"># Install dependencies</span>
+<span class="cmd">pip install -r requirements.txt</span>
+
+<span class="cmt"># Run the CLI</span>
+<span class="cmd">python keyweaver.py --help</span>
+
+<span class="cmt"># Run the GUI</span>
+<span class="cmd">python keyweaver_gui.py</span></code></pre>
+
+      <h3>Common recipes</h3>
+      <div class="recipes">
+        <div class="recipe">
+          <h4>VeraCrypt 32-byte key, Argon2id, with fingerprint</h4>
+          <pre><code><span class="cmd">python keyweaver.py --kdf argon2id --veracrypt --fingerprint</span></code></pre>
+        </div>
+        <div class="recipe">
+          <h4>Binary keyfile, scrypt, restrictive permissions</h4>
+          <pre><code><span class="cmd">python keyweaver.py --kdf scrypt --output-mode keyfile \
+  --keyfile ~/secrets/vol1.key</span></code></pre>
+        </div>
+        <div class="recipe">
+          <h4>Copy to clipboard, auto-clear in 60 seconds</h4>
+          <pre><code><span class="cmd">python keyweaver.py --kdf argon2id --copy --copy-timeout 60</span></code></pre>
+        </div>
+        <div class="recipe">
+          <h4>Refuse weak passphrases</h4>
+          <pre><code><span class="cmd">python keyweaver.py --min-entropy 100</span></code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section id="kdf" class="kdf" aria-labelledby="kdf-title">
+      <h2 id="kdf-title">KDF parameter guidance</h2>
+      <p class="warn">
+        ⚠ Parameters are part of the determinism contract. Pick once, write them
+        down, and never change them for a given key — otherwise you cannot
+        reproduce that key.
+      </p>
+
+      <div class="table-wrapper">
+        <table class="kdf-table">
+          <thead>
+            <tr>
+              <th>KDF</th>
+              <th>Default</th>
+              <th>Tighter</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">PBKDF2-SHA512</th>
+              <td><code>iter=600 000</code></td>
+              <td><code>iter=2 000 000+</code></td>
+              <td>Stdlib only. No memory hardness.</td>
+            </tr>
+            <tr>
+              <th scope="row">scrypt</th>
+              <td><code>N=16 384, r=8, p=1</code><br />≈16 MiB</td>
+              <td><code>N=1 048 576</code><br />≈1 GiB</td>
+              <td>Memory-hard. Strong GPU resistance.</td>
+            </tr>
+            <tr>
+              <th scope="row">Argon2id</th>
+              <td><code>m=65 536, t=3, p=1</code><br />64 MiB</td>
+              <td><code>m=1 048 576, t=4</code><br />1 GiB</td>
+              <td>Modern best practice. Recommended for new deployments.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="security" class="security" aria-labelledby="security-title">
+      <h2 id="security-title">Security</h2>
+      <div class="grid two">
+        <article class="card">
+          <h3>Protects against</h3>
+          <ul>
+            <li>Disclosure of one passphrase alone.</li>
+            <li>Cross-context reuse (domain-separated personalization).</li>
+            <li>Race conditions on keyfile creation (atomic <code>O_EXCL</code> writes, mode <code>0600</code>).</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>Does not protect against</h3>
+          <ul>
+            <li>Compromise of the running process (memory dumps, keyloggers).</li>
+            <li>Disclosure of both passphrases — by design.</li>
+            <li>Disclosure of the derived key or written keyfile.</li>
+            <li>Weak passphrases — pick long, high-entropy, non-reused secrets.</li>
+          </ul>
+        </article>
+      </div>
+
+      <p class="muted">
+        Memory wiping is best-effort: Python cannot reliably erase immutable strings.
+        Internal buffers use <code>bytearray</code> and are zeroed after use.
+        For high-value workflows, run on a system with encrypted swap and locked memory pages.
+      </p>
+    </section>
+
+    <section class="cta-end" aria-labelledby="cta-title">
+      <h2 id="cta-title">Try it</h2>
+      <p>One file, one dependency, one deterministic key.</p>
+      <a class="btn btn-primary" href="https://github.com/MuchDevSuchCode/KeyWeaver">Get KeyWeaver →</a>
+    </section>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>KeyWeaver · MIT License · <a href="https://github.com/MuchDevSuchCode/KeyWeaver">source</a></p>
+  </footer>
+
+  <script src="script.js" defer></script>
+</body>
+</html>

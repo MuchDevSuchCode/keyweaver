@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "Bash(pip install *)",
+      "Bash(node --check /c/Users/engineer/code/KeyWeaver/docs/script.js)"
+    ]
+  }
+}
