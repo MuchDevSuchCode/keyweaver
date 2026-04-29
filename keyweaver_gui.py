@@ -93,9 +93,13 @@ class KeyWeaverGUI:
         entry1 = ttk.Entry(frame, show="*", width=44)
         entry1.grid(row=0, column=1, sticky="ew")
 
-        ttk.Label(frame, text="Confirm:").grid(row=1, column=0, sticky="w", padx=(0, 6), pady=(4, 0))
+        ttk.Label(frame, text="Confirm:", foreground="#888").grid(
+            row=1, column=0, sticky="w", padx=(0, 6), pady=(4, 0))
         entry2 = ttk.Entry(frame, show="*", width=44)
         entry2.grid(row=1, column=1, sticky="ew", pady=(4, 0))
+        ttk.Label(frame, text="(optional — leave empty if you used Show)",
+                  foreground="#888", font=("Segoe UI", 8)).grid(
+            row=2, column=1, sticky="w", pady=(0, 2))
 
         show_check = ttk.Checkbutton(
             frame, text="Show", variable=show_var,
@@ -104,10 +108,10 @@ class KeyWeaverGUI:
         show_check.grid(row=0, column=2, rowspan=2, padx=(8, 0))
 
         meter = ttk.Progressbar(frame, mode="determinate", maximum=160, length=240)
-        meter.grid(row=2, column=1, sticky="ew", pady=(8, 0))
+        meter.grid(row=3, column=1, sticky="ew", pady=(8, 0))
 
         meter_label = ttk.Label(frame, text="Strength: 0 bits", foreground="#666")
-        meter_label.grid(row=2, column=2, sticky="w", padx=(8, 0), pady=(8, 0))
+        meter_label.grid(row=3, column=2, sticky="w", padx=(8, 0), pady=(8, 0))
 
         entry1.bind("<KeyRelease>",
                     lambda _e: self._update_strength(entry1, meter, meter_label))
@@ -134,14 +138,30 @@ class KeyWeaverGUI:
             if value == "argon2id" and not kw.ARGON2_AVAILABLE:
                 rb.state(["disabled"])
 
+        self.kdf_hint_var = tk.StringVar(value="")
+        self.kdf_hint_label = ttk.Label(
+            frame, textvariable=self.kdf_hint_var,
+            foreground="#a06000", font=("Segoe UI", 9, "italic"),
+        )
+        self.kdf_hint_label.grid(row=1, column=0, sticky="w", pady=(4, 0))
+
         self.kdf_params_frame = ttk.Frame(frame)
-        self.kdf_params_frame.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        self.kdf_params_frame.grid(row=2, column=0, sticky="ew", pady=(8, 0))
 
     def _update_kdf_panel(self):
         for child in self.kdf_params_frame.winfo_children():
             child.destroy()
 
         kdf = self.kdf_var.get()
+        if kdf == "argon2id":
+            self.kdf_hint_var.set("")
+        elif kdf == "scrypt":
+            self.kdf_hint_var.set("Tip: Argon2id is the modern best practice for new keys.")
+        else:
+            self.kdf_hint_var.set(
+                "Tip: PBKDF2 has no memory hardness. Argon2id is recommended for new keys."
+            )
+
         f = self.kdf_params_frame
         if kdf == "pbkdf2":
             ttk.Label(f, text="Iterations:").grid(row=0, column=0, sticky="w")
@@ -263,10 +283,10 @@ class KeyWeaverGUI:
         if not p1a or not p2a:
             messagebox.showerror("Missing input", "Both passphrases are required.")
             return None
-        if p1a != p1b:
+        if p1b and p1a != p1b:
             messagebox.showerror("Mismatch", "Passphrase #1 confirmation does not match.")
             return None
-        if p2a != p2b:
+        if p2b and p2a != p2b:
             messagebox.showerror("Mismatch", "Passphrase #2 confirmation does not match.")
             return None
         if p1a == p2a:

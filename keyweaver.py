@@ -386,8 +386,9 @@ def parse_command_line_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--kdf",
         choices=["pbkdf2", "scrypt", "argon2id"],
-        default="pbkdf2",
-        help="KDF: pbkdf2 (default), scrypt, or argon2id.",
+        default=None,
+        help="KDF: pbkdf2 (default), scrypt, or argon2id. "
+             "Argon2id is the modern best practice and is recommended for new keys.",
     )
 
     parser.add_argument(
@@ -505,6 +506,22 @@ def parse_command_line_arguments() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_command_line_arguments()
+
+    kdf_was_unspecified = args.kdf is None
+    if kdf_was_unspecified:
+        args.kdf = "pbkdf2"
+
+    if (
+        kdf_was_unspecified
+        and not args.no_warnings
+        and not args.quiet
+    ):
+        print(
+            "NOTE: Using PBKDF2 (default). Argon2id is the modern best practice\n"
+            "      for new keys. Re-run with --kdf argon2id to use it.\n"
+            "      (Suppress this notice with --no-warnings.)\n",
+            file=sys.stderr,
+        )
 
     if args.output_mode == "keyfile" and not args.keyfile:
         print("ERROR: --output-mode keyfile requires --keyfile PATH.", file=sys.stderr)
